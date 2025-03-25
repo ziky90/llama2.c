@@ -175,12 +175,13 @@ def pretokenize(vocab_size):
 class PretokDataset(torch.utils.data.IterableDataset):
     """Loads pretokenized examples from disk and yields them as PyTorch tensors."""
 
-    def __init__(self, split, max_seq_len, vocab_size, vocab_source):
+    def __init__(self, split, max_seq_len, vocab_size, vocab_source, number_of_predicted_tokens=2):
         super().__init__()
         self.split = split
         self.max_seq_len = max_seq_len
         self.vocab_size = vocab_size
         self.vocab_source = vocab_source
+        self.number_of_predicted_tokens = number_of_predicted_tokens
 
     def __iter__(self):
         # get worker info within a DataLoader
@@ -215,11 +216,12 @@ class PretokDataset(torch.utils.data.IterableDataset):
                 rng.shuffle(ixs)
                 for ix in ixs:
                     start = ix * self.max_seq_len
-                    end = start + self.max_seq_len + 1
+                    end = start + self.max_seq_len + self.number_of_predicted_tokens
                     # calling .astype will copy the data into a new numpy array, now in RAM
                     chunk = torch.from_numpy((m[start:end]).astype(np.int64))
-                    x = chunk[:-1]
-                    y = chunk[1:]
+                    x = chunk[:-self.number_of_predicted_tokens]
+                    y = torch.stack([chunk[i:len(chunk) - (self.number_of_predicted_tokens - i)] for i in range(1, self.number_of_predicted_tokens + 1)])
+                    y = torch.transpose(y, 0, 1)
                     yield x, y
 
 # -----------------------------------------------------------------------------

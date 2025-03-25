@@ -22,6 +22,7 @@ class ModelArgs:
     norm_eps: float = 1e-5
     max_seq_len: int = 2048
     dropout: float = 0.0
+    number_of_predicted_tokens: int = 2
 
 
 class RMSNorm(torch.nn.Module):
@@ -211,12 +212,18 @@ class Transformer(nn.Module):
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
+        self.number_of_predicted_tokens = params.number_of_predicted_tokens
 
         self.tok_embeddings = nn.Embedding(params.vocab_size, params.dim)
         self.dropout = nn.Dropout(params.dropout)
         self.layers = torch.nn.ModuleList()
-        for layer_id in range(params.n_layers):
+        for layer_id in range(params.n_layers - self.number_of_predicted_tokens + 1):
             self.layers.append(TransformerBlock(layer_id, params))
+
+        self.extra_heads = torch.nn.ModuleList()
+        for layer_id in range(params.n_layers - params.number_of_predicted_tokens + 1, self.n_layers):
+            self.extra_heads.append(TransformerBlock(layer_id, params))
+
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = nn.Linear(params.dim, params.vocab_size, bias=False)
 
@@ -255,12 +262,28 @@ class Transformer(nn.Module):
 
         for layer in self.layers:
             h = layer(h, freqs_cos, freqs_sin)
-        h = self.norm(h)
+        h_trunk = h
+
+        # prediction heads
+        latents = []
+        n_heads_to_use = self.number_of_predicted_tokens
+        prediction_heads = [self.layers[-1]] + list(self.extra_heads)
+        for layer in prediction_heads[:n_heads_to_use]:
+            h = layer(h_trunk, freqs_cos, freqs_sin)
+            h = self.norm(h)
+            latents.append(h)
+
+        h = torch.stack(latents, dim=-2)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.output(h)
-            self.last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            l = 0
+            for i in range(len(latents)):
+                self.output(latents[i])
+                l += F.cross_entropy(latents[i].view(-1, latents[i].size(-1)), targets[:, :, i].view(-1), ignore_index=-1) * (len(latents) - i)
+            self.last_loss = l
+            # self.last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the output on the very last position
             logits = self.output(h[:, [-1], :]) # note: using list [-1] to preserve the time dim
