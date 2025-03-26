@@ -273,16 +273,17 @@ class Transformer(nn.Module):
             h = self.norm(h)
             latents.append(h)
 
-        h = torch.stack(latents, dim=-2)
-
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.output(h)
+            # logits = self.output(h)
             l = 0
+            h_list = []
             for i in range(len(latents)):
-                self.output(latents[i])
-                l += F.cross_entropy(latents[i].view(-1, latents[i].size(-1)), targets[:, :, i].view(-1), ignore_index=-1) * (len(latents) - i)
+                h = self.output(latents[i])
+                h_list.append(h)
+                l += F.cross_entropy(h.view(-1, h.size(-1)), targets[:, :, i].view(-1), ignore_index=-1) * (len(latents) - i)
             self.last_loss = l
+            logits = torch.stack(h_list, dim=-2)
             # self.last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the output on the very last position
